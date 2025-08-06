@@ -18,9 +18,7 @@ import (
 )
 
 type Bot struct {
-	config   *config.Config
-	settings *Settings
-
+	config  *config.Config
 	session *discordgo.Session
 
 	ctx    context.Context
@@ -30,30 +28,27 @@ type Bot struct {
 	rateLimits     map[string][]int64
 	memberCache    map[string]string
 	messageHistory map[string][]*openrouter.Message
-	reminders      []*Reminder
-}
 
-type Reminder struct {
-	ChannelID string `json:"channel_id"`
-	UserID    string `json:"user_id"`
-	Message   string `json:"message"`
-	Time      int64  `json:"time"`
+	reminders       []*Reminder
+	reminderTimers  map[string]*time.Timer
+	reminderCounter int64
 }
 
 func New(config *config.Config) *Bot {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Bot{
-		config:   config,
-		settings: &Settings{},
+		config: config,
 
 		ctx:    ctx,
 		cancel: cancel,
 
-		mutex:          sync.RWMutex{},
-		rateLimits:     map[string][]int64{},
-		memberCache:    map[string]string{},
+		mutex:       sync.RWMutex{},
+		rateLimits:  map[string][]int64{},
+		memberCache: map[string]string{},
+
 		messageHistory: map[string][]*openrouter.Message{},
 		reminders:      []*Reminder{},
+		reminderTimers: map[string]*time.Timer{},
 	}
 }
 
@@ -93,7 +88,7 @@ func (b *Bot) Run() error {
 		log.Warnf("Could not load existing data: %v", err)
 	}
 
-	go b.reminderChecker()
+	b.initializeReminders()
 	// go b.cleanupTasks()
 	go b.autoSaveData()
 
@@ -214,10 +209,14 @@ func (b *Bot) messageCreate(s *discordgo.Session, event *discordgo.MessageCreate
 	}
 
 	// Check if message mensions the bot
-	// if slices.Contains(event.Mentions, b.session.State.User) {
-	// 	// TODO: Handle bot mentions
-	// 	return
-	// }
+	if event.Mentions != nil {
+		for _, mention := range event.Mentions {
+			if mention.ID == b.session.State.User.ID {
+				b.engageFromMention(s, event)
+				return
+			}
+		}
+	}
 
 	// Randomly respond to messages
 	if rand.Float32() < 0.1 {
@@ -266,26 +265,6 @@ func (b *Bot) storeMessageForContext(channelID string, message *openrouter.Messa
 	b.mutex.Unlock()
 }
 
-func (b *Bot) reminderChecker() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		now := time.Now().Unix()
-
-		b.mutex.Lock()
-		for i := len(b.reminders) - 1; i >= 0; i-- {
-			reminder := b.reminders[i]
-			if reminder.Time <= now {
-				content := fmt.Sprintf("<@%s> You asked me to remind you about this: %s", reminder.UserID, reminder.Message)
-				b.session.ChannelMessageSend(reminder.ChannelID, content)
-				b.reminders = append(b.reminders[:i], b.reminders[i+1:]...)
-			}
-		}
-		b.mutex.Unlock()
-	}
-}
-
 func (b *Bot) autoSaveData() {
 	ticker := time.NewTicker(time.Duration(b.config.AutoSaveInterval) * time.Second)
 	defer ticker.Stop()
@@ -316,6 +295,9 @@ func (b *Bot) shutdown() {
 		}
 		time.Sleep(1 * time.Second) // Give time for status to update
 	}
+
+	// Stop all reminder timers
+	b.shutdownReminders()
 
 	// Save data before exiting
 	if err := b.saveSettings(); err != nil {

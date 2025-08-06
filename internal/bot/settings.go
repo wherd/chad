@@ -12,23 +12,28 @@ import (
 const dataVersion = "1.0"
 
 type Settings struct {
-	Timestamp int64  `json:"timestamp"`
-	Version   string `json:"version"`
+	Timestamp       int64       `json:"timestamp"`
+	Version         string      `json:"version"`
+	Reminders       []*Reminder `json:"reminders"`
+	ReminderCounter int64       `json:"reminder_counter"`
 }
 
 func (b *Bot) saveSettings() error {
 	b.mutex.RLock()
-	defer b.mutex.RUnlock()
+	settings := Settings{
+		Timestamp:       time.Now().Unix(),
+		Version:         dataVersion,
+		Reminders:       b.reminders,
+		ReminderCounter: b.reminderCounter,
+	}
+	b.mutex.RUnlock()
 
-	b.settings.Timestamp = time.Now().Unix()
-	b.settings.Version = dataVersion
-
-	jsondata, err := json.MarshalIndent(b.settings, "", "  ")
+	jsondata, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	tempFile := ".chad_memory.json.tmp"
+	tempFile := "chad_memory.json.tmp"
 	if err := os.WriteFile(tempFile, jsondata, 0644); err != nil {
 		return err
 	}
@@ -64,7 +69,8 @@ func (b *Bot) loadSettings() error {
 	}
 
 	b.mutex.Lock()
-	b.settings = &data
+	b.reminders = data.Reminders
+	b.reminderCounter = data.ReminderCounter
 	b.mutex.Unlock()
 
 	log.Debugf("Loaded data from %s (version %s)", time.Unix(data.Timestamp, 0).Format("2006-01-02 15:04:05"), data.Version)

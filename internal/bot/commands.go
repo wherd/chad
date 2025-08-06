@@ -104,15 +104,7 @@ func (b *Bot) handleFactcheck(s *discordgo.Session, m *discordgo.MessageCreate) 
 	m.Content = strings.TrimPrefix(m.Content, "!factcheck ")
 
 	if len(m.Content) == 0 {
-		b.session.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
-			Title:       "🔍 Factcheck Command Usage",
-			Description: "Verify claims with web search!",
-			Color:       0x3498db,
-			Fields: []*discordgo.MessageEmbedField{
-				{Name: "Usage", Value: "`!factcheck <claim>`", Inline: false},
-				{Name: "Example", Value: "`!factcheck The moon is made of cheese`", Inline: false},
-			},
-		})
+		s.ChannelMessageSend(m.ChannelID, "Usage: `!factcheck <claim>`")
 		return
 	}
 
@@ -289,7 +281,14 @@ func (b *Bot) handleRemind(s *discordgo.Session, m *discordgo.MessageCreate) {
 	reminderText := strings.Join(args[2:], " ")
 	reminderTime := time.Now().Add(duration)
 
+	// Generate unique ID with incremental counter
+	b.mutex.Lock()
+	b.reminderCounter++
+	reminderID := fmt.Sprintf("%s_%d", m.Author.ID, b.reminderCounter)
+	b.mutex.Unlock()
+
 	reminder := &Reminder{
+		ID:        reminderID,
 		Message:   reminderText,
 		Time:      reminderTime.Unix(),
 		ChannelID: m.ChannelID,
@@ -298,6 +297,7 @@ func (b *Bot) handleRemind(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	b.mutex.Lock()
 	b.reminders = append(b.reminders, reminder)
+	b.scheduleReminder(reminder)
 	b.mutex.Unlock()
 
 	s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("<@!%s> I'll remind you in %s about: \"%s\"", m.Author.ID, args[1], reminderText))
